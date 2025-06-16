@@ -16,11 +16,11 @@ ddpm.scheduler.set_timesteps(1000)
 ddpm.scheduler.config.clip_sample = True
 ddpm.scheduler.step_with_proj = types.MethodType(step_with_proj, ddpm.scheduler)
 
-
 executor = ProcessPoolExecutor(max_workers=4)
 # executor = None
 # executor = ThreadPoolExecutor(max_workers=4)
 
+@torch.no_grad()
 def sample_image(bs):
     image = torch.randn(bs, 2, 32).to("cuda")
     for t in tqdm(ddpm.scheduler.timesteps):
@@ -30,6 +30,7 @@ def sample_image(bs):
     image = image.detach().cpu().numpy()
     return image
 
+@torch.no_grad()
 def sample_image_with_proj(bs):
     image = torch.randn(bs, 2, 32).to("cuda")
     for t in tqdm(ddpm.scheduler.timesteps):
@@ -37,6 +38,17 @@ def sample_image_with_proj(bs):
         image = ddpm.scheduler.step_with_proj(eps, t, image, executor=executor).prev_sample
 
     image[:, 0:1, :] = monotonic_proj(image[:, 0:1, :], executor=executor)
+    image = image.detach().cpu().numpy()
+    return image
+
+@torch.no_grad()
+def sample_image_with_final_proj(bs):
+    image = torch.randn(bs, 2, 32).to("cuda")
+    for t in tqdm(ddpm.scheduler.timesteps):
+        eps = ddpm.unet(image, t.unsqueeze(0)).sample
+        image = ddpm.scheduler.step(eps, t, image).prev_sample
+    
+    image[:, 0:1, :] = monotonic_proj(image[:, 0:1, :].detach(), executor=executor)
     image = image.detach().cpu().numpy()
     return image
 
@@ -69,7 +81,7 @@ def evaluate_model_performance(num_samples=128, use_projection=False):
         mean_min_distance: Average minimum L2 distance to gt1 or gt2
     """
     if use_projection:
-        samples = sample_image_with_proj(num_samples)
+        samples = sample_image_with_final_proj(num_samples)
     else:
         samples = sample_image(num_samples)
     
@@ -123,13 +135,13 @@ def evaluate_model_performance(num_samples=128, use_projection=False):
 print("="*50)
 print("EVALUATION WITHOUT MONOTONIC PROJECTION")
 print("="*50)
-mean_dist_no_proj, distances_no_proj = evaluate_model_performance(num_samples=1024, use_projection=False)
+mean_dist_no_proj, distances_no_proj = evaluate_model_performance(num_samples=2048, use_projection=False)
 
 # Evaluate with projection
 print("\n" + "="*50)
 print("EVALUATION WITH MONOTONIC PROJECTION")
 print("="*50)
-mean_dist_with_proj, distances_with_proj = evaluate_model_performance(num_samples=1024, use_projection=True)
+mean_dist_with_proj, distances_with_proj = evaluate_model_performance(num_samples=2048, use_projection=True)
 
 # Compare results
 print("\n" + "="*50)
@@ -173,9 +185,7 @@ print("="*30)
 for i in range(min(5, len(distances_no_proj))):
     print(f"Sample {i}: No proj = {distances_no_proj[i]:.4f}, With proj = {distances_with_proj[i]:.4f}")
 
-
 # %%
-
 
 def is_monotonic_rate(data):
     if isinstance(data, np.ndarray):
@@ -187,7 +197,7 @@ def is_monotonic_rate(data):
     rate = (rate <= 0).float()
     return rate.mean().item()
 
-# sampled_data = sample_image_with_proj(1024)
+sampled_data = sample_image_with_final_proj(1024)
 is_monotonic_rate(sampled_data)
 
 # %%
